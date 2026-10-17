@@ -1,0 +1,57 @@
+{
+  "$schema": "../../docs/plugins/plugin.schema.json",
+  "id": "media.24thframe.facebook-events",
+  "name": "Facebook Events (Stealth Browser)",
+  "version": "1.0.0",
+  "description": "Scrapes Facebook /events using a stealth automated browser and session cookies.",
+  "author": "24th Frame",
+  "category": "events",
+  "photoscout": "^1.3",
+  "server": "server.js",
+  "web": "web.js",
+  "permissions": [
+    { "kind": "events", "detail": "Facebook event feed provider and link importer" },
+    { "kind": "network", "detail": "127.0.0.1:9222" },
+    { "kind": "network", "detail": "localhost:9222" },
+    { "kind": "network", "detail": "chromium:9222" },
+    { "kind": "network", "detail": "172.16.9.9:9222" },
+    { "kind": "secrets", "detail": "Facebook session cookies" }
+  ],
+  "settings": [
+    {
+      "key": "browserUrl",
+      "type": "string",
+      "label": "Chromium CDP Endpoint",
+      "default": "http://127.0.0.1:9222",
+      "help": "URL of the stealth Chromium DevTools endpoint (e.g. http://127.0.0.1:9222, http://chromium:9222 or http://172.16.9.9:9222)"
+    },
+    {
+      "key": "cookie",
+      "type": "secret",
+      "label": "Facebook Cookie",
+      "help": "Logged-in Facebook cookies (c_user=...; xs=...; datr=...). Copy from DevTools -> Application -> Cookies on facebook.com"
+    },
+    {
+      "key": "exploreSection",
+      "type": "select",
+      "label": "Events Feed Section",
+      "default": "events",
+      "options": [
+        { "value": "events", "label": "/events (Main Events Feed)" },
+        { "value": "explore", "label": "/events/explore/ (Explore / Local Discovery)" },
+        { "value": "search", "label": "Area & Topic Search (/events/search/?q=...)" }
+      ],
+      "help": "Which Facebook events section to scrape during scheduled refresh"
+    },
+    {
+      "key": "scrollSteps",
+      "type": "number",
+      "label": "Scroll Depth",
+      "default": 6,
+      "min": 1,
+      "max": 20,
+      "help": "Number of scroll downs on the feed to trigger lazy-loading of event cards"
+    }
+  ],
+  "public": ["/status"]
+}

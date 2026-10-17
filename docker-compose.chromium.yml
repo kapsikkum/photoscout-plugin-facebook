@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  chromium:
+    build:
+      context: .
+      dockerfile: Dockerfile.chromium
+    image: photoscout-stealth-chromium:latest
+    container_name: photoscout-stealth-chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9222:9222"
+    volumes:
+      - chromium_profile:/profile
+    security_opt:
+      - seccomp:unconfined
+    shm_size: 1gb
+    environment:
+      - CHROMIUM_PORT=9222
+      - CHROMIUM_INTERNAL_PORT=9221
+
+volumes:
+  chromium_profile:

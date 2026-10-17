@@ -1,0 +1,24 @@
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      chromium \
+      ca-certificates \
+      fonts-liberation \
+      fonts-noto-core \
+      fonts-noto-color-emoji \
+      dumb-init \
+      socat \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY chromium-entrypoint.sh /usr/local/bin/chromium-entrypoint
+RUN chmod +x /usr/local/bin/chromium-entrypoint
+
+RUN useradd --create-home --shell /usr/sbin/nologin browser \
+ && mkdir -p /profile && chown browser:browser /profile
+USER browser
+
+EXPOSE 9222
+VOLUME /profile
+
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/chromium-entrypoint"]
