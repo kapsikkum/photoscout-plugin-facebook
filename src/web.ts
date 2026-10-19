@@ -103,11 +103,15 @@ const plugin: WebPlugin = {
           output.textContent = 'Connecting to stealth browser and navigating to /events…\n';
           try {
             const res = await host.data.fetch('/scrape-now', { method: 'POST' });
+            if (!res.ok) {
+              const body = await res.text();
+              throw new Error(`HTTP ${res.status}: ${body.slice(0, 150)}`);
+            }
             const data = (await res.json()) as ScrapeReply;
             if (data.ok) {
               output.textContent += `✓ Success!\nFound: ${data.found} events\nIngested: ${data.ingested} events\nRejected (invalid dates): ${data.rejected}\nOutside active areas: ${data.outsideArea}\n`;
               if (data.sample && data.sample.length > 0) {
-                output.textContent += `\nSample events:\n` + data.sample.map((s) => `• ${s.title} (${s.startTime})`).join('\n');
+                output.textContent += `\nSample events:\n` + data.sample.map((s) => `• ${s.title} (${s.startTime})${s.venue ? ' @ ' + s.venue : ''}`).join('\n');
               }
               host.activity(`Facebook scrape: ingested ${data.ingested} events`, 'info');
             } else {

@@ -89,16 +89,23 @@ const plugin: ServerPlugin = {
         return res.status(400).json({ error: 'Please set your Facebook Cookie in Settings -> Plugins first.' });
       }
 
+      const startTime = Date.now();
       try {
-        ctx.log.info(`Manual scrape initiated for ${conf.exploreSection || 'events'}`);
+        const areas = ctx.areas();
+        const city = areas[0]?.name || 'Bathurst';
+        ctx.log.info(`Manual scrape initiated for ${conf.exploreSection || 'events'} (city: ${city})`);
         const events = await scrapeFacebookEvents({
           browserUrl,
           cookie: conf.cookie,
           section: conf.exploreSection || 'events',
-          scrollSteps: conf.scrollSteps ?? 6,
+          query: city,
+          scrollSteps: Math.min(conf.scrollSteps ?? 5, 8),
         });
 
+        ctx.log.info(`Scraped ${events.length} Facebook events in ${Math.round((Date.now() - startTime) / 1000)}s. Ingesting...`);
         const stats = await ctx.events.ingest('facebook-stealth', events);
+        ctx.log.info(`Ingested ${stats.kept} events (${stats.rejected} rejected, ${stats.outsideArea} outside area) in ${Math.round((Date.now() - startTime) / 1000)}s total`);
+
         res.json({
           ok: true,
           found: events.length,
@@ -108,7 +115,7 @@ const plugin: ServerPlugin = {
           sample: events.slice(0, 3).map((e) => ({ title: e.title, startTime: e.startTime, venue: e.venueName })),
         });
       } catch (err) {
-        ctx.log.error(`Manual scrape failed: ${(err as Error).message}`);
+        ctx.log.error(`Manual scrape failed after ${Math.round((Date.now() - startTime) / 1000)}s: ${(err as Error).message}`);
         res.status(500).json({ error: (err as Error).message });
       }
     });

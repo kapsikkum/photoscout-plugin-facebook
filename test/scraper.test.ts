@@ -58,3 +58,40 @@ test('parseFacebookDate returns null instead of inventing a date', () => {
   assert.equal(parseFacebookDate('', sydney), null);
   assert.equal(parseFacebookDate('Creedence Clearwater Experience', sydney), null);
 });
+
+test('extractCardsInBrowser correctly separates date, title, and venue', async () => {
+  const { extractCardsInBrowser } = await import('../src/scraper.js');
+  const fakeDoc = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes('a[')) {
+        return [
+          {
+            getAttribute: (attr: string) => (attr === 'href' ? '/events/1037295122211380/' : null),
+            innerText: 'Sat, 7 Nov at 09:00\nBX THRIFT MARKETS\nBathurst Showground\nInterested\nShare',
+            closest: () => ({
+              querySelectorAll: () => [
+                { children: [], innerText: 'Sat, 7 Nov at 09:00' },
+                { children: [], innerText: 'BX THRIFT MARKETS' },
+                { children: [], innerText: 'Bathurst Showground' },
+              ],
+              querySelector: () => null,
+            }),
+            parentElement: null,
+          },
+        ];
+      }
+      return [];
+    },
+  };
+  (globalThis as unknown as { document: unknown }).document = fakeDoc;
+  try {
+    const cards = extractCardsInBrowser();
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].sourceId, '1037295122211380');
+    assert.equal(cards[0].title, 'BX THRIFT MARKETS');
+    assert.equal(cards[0].dateText, 'Sat, 7 Nov at 09:00');
+    assert.equal(cards[0].locationText, 'Bathurst Showground');
+  } finally {
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+});

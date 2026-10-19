@@ -121,18 +121,26 @@ export class Page {
     await this.send('Network.setCookies', { cookies: formatted });
   }
 
-  async goto(url: string, { timeoutMs = 25000, waitMs = 3000 }: { timeoutMs?: number; waitMs?: number } = {}): Promise<void> {
+  async goto(url: string, { timeoutMs = 15000, waitMs = 3000 }: { timeoutMs?: number; waitMs?: number } = {}): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const loaded = new Promise<void>((resolve) => {
-      const onDone = () => resolve();
+      const onDone = () => {
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
       this.on('Page.loadEventFired', onDone);
-      setTimeout(onDone, timeoutMs);
+      this.on('Page.domContentEventFired', () => {
+        setTimeout(onDone, 1500);
+      });
+      timer = setTimeout(onDone, timeoutMs);
     });
     await this.send('Page.navigate', { url });
     await loaded;
     if (waitMs > 0) await sleep(waitMs);
   }
 
-  async evaluate<T = unknown>(expression: string): Promise<T> {
+  async evaluate<T = unknown>(fnOrExpression: string | (() => T)): Promise<T> {
+    const expression = typeof fnOrExpression === 'function' ? `(${fnOrExpression.toString()})()` : fnOrExpression;
     const res = (await this.send('Runtime.evaluate', {
       expression,
       returnByValue: true,

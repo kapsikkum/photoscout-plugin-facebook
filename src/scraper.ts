@@ -156,6 +156,84 @@ export function parseFacebookDate(text?: string, options: ParseDateOptions = {})
   return null;
 }
 
+
+export interface RawCardItem {
+  sourceId: string;
+  title: string;
+  dateText?: string;
+  locationText?: string;
+  imageUrl?: string;
+  url: string;
+}
+
+export function extractCardsInBrowser(): RawCardItem[] {
+  const out: RawCardItem[] = [];
+  const seen = new Set<string>();
+
+  const dayWord = '(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*';
+  const monthWord = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
+  const dateLike = new RegExp(
+    '^(?:(?:this|next)\\s+)?(?:' + dayWord + '|today|tomorrow)\\b.*(?:\\d|' + monthWord + ')|^\\d{1,2}\\s+' + monthWord + '\\b|^' + monthWord + '\\s+\\d{1,2}\\b|^(?:today|tomorrow)\\b|^happening now',
+    'i'
+  );
+  const noise = /^(?:happening now|going|interested|share|invite|maybe|event|events|see more|more|\u00b7|\d+ (?:going|interested)|starts in .*|.* (?:going|interested))$/i;
+
+  const anchors = Array.from(document.querySelectorAll('a[href*="/events/"]'));
+  for (const a of anchors) {
+    const href = a.getAttribute('href') || '';
+    const m = href.match(/\/events\/(\d{8,})/);
+    if (!m) continue;
+    const id = m[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const fullUrl = 'https://www.facebook.com/events/' + id + '/';
+
+    // Traverse upwards to card container
+    let card = a.closest('div[role="article"]') || a.closest('div[data-visualcompletion]') || a.parentElement;
+    let dateText = '';
+    let locationText = '';
+    let imageUrl = '';
+
+    const texts: string[] = [];
+    const push = (t?: string | null) => {
+      const clean = (t || '').replace(/\s+/g, ' ').trim();
+      if (clean && !texts.includes(clean)) texts.push(clean);
+    };
+
+    for (const line of ((a as HTMLElement).innerText || '').split('\n')) push(line);
+    push(a.getAttribute('aria-label'));
+    if (card) {
+      for (const s of card.querySelectorAll('span, [dir="auto"]')) {
+        if (s.children.length === 0) push((s as HTMLElement).innerText);
+      }
+    }
+
+    const dateIdx = texts.findIndex((t) => t.length < 60 && dateLike.test(t));
+    if (dateIdx !== -1) dateText = texts[dateIdx];
+    const rest = texts.filter((t, i) => i !== dateIdx && !dateLike.test(t) && !noise.test(t) && t.length > 2);
+    const imgAlt = card && card.querySelector('img[alt]') ? ((card.querySelector('img[alt]') as HTMLImageElement).getAttribute('alt') || '').trim() : '';
+    const title = rest.find((t) => t.length >= 4) || (imgAlt.length >= 4 && !dateLike.test(imgAlt) ? imgAlt : '');
+    locationText = rest.find((t) => t !== title && t.length < 80) || '';
+    if (card) {
+      const img = card.querySelector('img[src*="fbcdn"]');
+      if (img) imageUrl = img.getAttribute('src') || '';
+    }
+
+    if (title && id) {
+      out.push({
+        sourceId: id,
+        title: title.split('\n')[0],
+        dateText,
+        locationText,
+        imageUrl,
+        url: fullUrl,
+      });
+    }
+  }
+  return out;
+}
+
 export async function scrapeFacebookEvents(opts: ScrapeOptions): Promise<PluginRawEvent[]> {
   const browser = await Browser.connect(opts.browserUrl);
   const page = await browser.newPage();
@@ -176,97 +254,24 @@ export async function scrapeFacebookEvents(opts: ScrapeOptions): Promise<PluginR
     await page.goto(targetUrl, { waitMs: 4000 });
 
     // Check for login wall / checkpoint
-    const checkpoint = await page.evaluate<string>(`
-      (() => {
-        const text = document.body ? document.body.innerText : '';
-        if (/You must log in to continue|Log in to Facebook|name="checkpoint"/i.test(text.slice(0, 4000))) {
-          return 'login_required';
-        }
-        return '';
-      })()
-    `);
+    const checkpoint = await page.evaluate<string>(() => {
+      const text = document.body ? document.body.innerText : '';
+      if (/You must log in to continue|Log in to Facebook|name="checkpoint"/i.test(text.slice(0, 4000))) {
+        return 'login_required';
+      }
+      return '';
+    });
 
     if (checkpoint === 'login_required') {
       throw new Error('Facebook served a login wall. Please update the Facebook Cookie in Settings -> Plugins.');
     }
 
     // Scroll down to load event cards
-    const scrollSteps = Math.max(1, Math.min(20, opts.scrollSteps ?? 6));
-    await page.scrollFeed(scrollSteps, 1200);
+    const scrollSteps = Math.max(1, Math.min(20, opts.scrollSteps ?? 5));
+    await page.scrollFeed(scrollSteps, 1000);
 
     // Extract events from page DOM
-    const rawEvents = await page.evaluate<
-      {
-        sourceId: string;
-        title: string;
-        dateText?: string;
-        locationText?: string;
-        imageUrl?: string;
-        url: string;
-      }[]
-    >(`
-      (() => {
-        const out = [];
-        const seen = new Set();
-
-        // 1. Check all event links
-        const anchors = Array.from(document.querySelectorAll('a[href*="/events/"]'));
-        for (const a of anchors) {
-          const href = a.getAttribute('href') || '';
-          const m = href.match(/\\/events\\/(\\d{8,})/);
-          if (!m) continue;
-          const id = m[1];
-          if (seen.has(id)) continue;
-          seen.add(id);
-
-          const fullUrl = 'https://www.facebook.com/events/' + id + '/';
-
-          // Traverse upwards to card container
-          let card = a.closest('div[role="article"]') || a.closest('div[data-visualcompletion]') || a.parentElement;
-          let dateText = '';
-          let locationText = '';
-          let imageUrl = '';
-
-          // An event card's link often wraps the date line ("Sat, 7 Nov at 09:00"), not the
-          // title, so classify every piece of text rather than trusting the first one.
-          const dayWord = '(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*';
-          const monthWord = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
-          const dateLike = new RegExp('^(?:(?:this|next)\\s+)?(?:' + dayWord + '|today|tomorrow)\\b.*(?:\\d|' + monthWord + ')|^\\d{1,2}\\s+' + monthWord + '\\b|^' + monthWord + '\\s+\\d{1,2}\\b|^(?:today|tomorrow)\\b|^happening now', 'i');
-          const noise = /^(?:happening now|going|interested|share|invite|maybe|event|events|see more|more|·|\\d+ (?:going|interested)|starts in .*|.* (?:going|interested))$/i;
-          const texts = [];
-          const push = (t) => { t = (t || '').replace(/\\s+/g, ' ').trim(); if (t && !texts.includes(t)) texts.push(t); };
-          for (const line of (a.innerText || '').split('\\n')) push(line);
-          push(a.getAttribute('aria-label'));
-          if (card) {
-            for (const s of card.querySelectorAll('span, [dir="auto"]')) {
-              if (s.children.length === 0) push(s.innerText);
-            }
-          }
-          const dateIdx = texts.findIndex((t) => t.length < 60 && dateLike.test(t));
-          if (dateIdx !== -1) dateText = texts[dateIdx];
-          const rest = texts.filter((t, i) => i !== dateIdx && !dateLike.test(t) && !noise.test(t) && t.length > 2);
-          const imgAlt = card && card.querySelector('img[alt]') ? (card.querySelector('img[alt]').getAttribute('alt') || '').trim() : '';
-          let title = rest.find((t) => t.length >= 4) || (imgAlt.length >= 4 && !dateLike.test(imgAlt) ? imgAlt : '');
-          locationText = rest.find((t) => t !== title && t.length < 80) || '';
-          if (card) {
-            const img = card.querySelector('img[src*="fbcdn"]');
-            if (img) imageUrl = img.getAttribute('src') || '';
-          }
-
-          if (title && id) {
-            out.push({
-              sourceId: id,
-              title: title.split('\\n')[0],
-              dateText,
-              locationText,
-              imageUrl,
-              url: fullUrl,
-            });
-          }
-        }
-        return out;
-      })()
-    `);
+    const rawEvents = await page.evaluate<RawCardItem[]>(extractCardsInBrowser);
 
     const events: PluginRawEvent[] = [];
     for (const item of rawEvents) {
@@ -293,6 +298,59 @@ export async function scrapeFacebookEvents(opts: ScrapeOptions): Promise<PluginR
   }
 }
 
+export interface RawSingleEventItem {
+  id: string;
+  title: string;
+  description?: string;
+  dateText?: string;
+  venueName?: string;
+  address?: string;
+  imageUrl?: string;
+  jsonLd?: unknown;
+}
+
+export function extractSingleEventInBrowser(): RawSingleEventItem {
+  const idMatch = window.location.href.match(/\/events\/(\d{8,})/);
+  const id = idMatch ? idMatch[1] : '';
+  const titleEl = document.querySelector('h1') || document.querySelector('span[dir="auto"]');
+  const title = titleEl ? (titleEl as HTMLElement).innerText.trim() : '';
+
+  // Extract description
+  let description = '';
+  const descSection = Array.from(document.querySelectorAll('div[data-ad-preview="message"], div[dir="auto"]'))
+    .find((el) => (el as HTMLElement).innerText && (el as HTMLElement).innerText.length > 40);
+  if (descSection) description = (descSection as HTMLElement).innerText.trim();
+
+  // Check for JSON-LD schema.org/Event
+  let jsonLd: unknown = null;
+  for (const script of Array.from(document.querySelectorAll('script[type="application/ld+json"]'))) {
+    try {
+      const parsed = JSON.parse(script.textContent || '');
+      if (parsed && (parsed['@type'] === 'Event' || parsed['@type'] === 'SocialEvent')) {
+        jsonLd = parsed;
+        break;
+      }
+    } catch {}
+  }
+
+  const img = document.querySelector('img[src*="fbcdn"]');
+  const imageUrl = img ? img.getAttribute('src') || '' : '';
+
+  // The visible date line ("Saturday, 24 October 2026 at 10:00 UTC+11") when JSON-LD is absent.
+  let dateText = '';
+  const dateRe = /^(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+|today|tomorrow|this\s+\w+|next\s+\w+)?.*\d.*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow)|^(?:today|tomorrow)\b/i;
+  for (const el of Array.from(document.querySelectorAll('span, div[dir="auto"]'))) {
+    if (el.children.length) continue;
+    const t = ((el as HTMLElement).innerText || '').trim();
+    if (t.length > 4 && t.length < 90 && /\d/.test(t) && dateRe.test(t)) {
+      dateText = t;
+      break;
+    }
+  }
+
+  return { id, title, description, imageUrl, jsonLd, dateText };
+}
+
 export async function scrapeSingleEvent(browserUrl: string, eventUrl: string, cookie?: string): Promise<PluginRawEvent | null> {
   const browser = await Browser.connect(browserUrl);
   const page = await browser.newPage();
@@ -305,55 +363,7 @@ export async function scrapeSingleEvent(browserUrl: string, eventUrl: string, co
 
     await page.goto(eventUrl, { waitMs: 3000 });
 
-    const data = await page.evaluate<{
-      id: string;
-      title: string;
-      description?: string;
-      dateText?: string;
-      venueName?: string;
-      address?: string;
-      imageUrl?: string;
-      jsonLd?: unknown;
-    }>(`
-      (() => {
-        const idMatch = window.location.href.match(/\\/events\\/(\\d{8,})/);
-        const id = idMatch ? idMatch[1] : '';
-        const titleEl = document.querySelector('h1') || document.querySelector('span[dir="auto"]');
-        const title = titleEl ? titleEl.innerText.trim() : '';
-
-        // Extract description
-        let description = '';
-        const descSection = Array.from(document.querySelectorAll('div[data-ad-preview="message"], div[dir="auto"]'))
-          .find(el => el.innerText && el.innerText.length > 40);
-        if (descSection) description = descSection.innerText.trim();
-
-        // Check for JSON-LD schema.org/Event
-        let jsonLd = null;
-        for (const script of Array.from(document.querySelectorAll('script[type="application/ld+json"]'))) {
-          try {
-            const parsed = JSON.parse(script.innerText);
-            if (parsed && (parsed['@type'] === 'Event' || parsed['@type'] === 'SocialEvent')) {
-              jsonLd = parsed;
-              break;
-            }
-          } catch {}
-        }
-
-        const img = document.querySelector('img[src*="fbcdn"]');
-        const imageUrl = img ? img.getAttribute('src') || '' : '';
-
-        // The visible date line ("Saturday, 24 October 2026 at 10:00 UTC+11") when JSON-LD is absent.
-        let dateText = '';
-        const dateRe = /^(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\\s+|today|tomorrow|this\\s+\\w+|next\\s+\\w+)?.*\\d.*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow)|^(?:today|tomorrow)\\b/i;
-        for (const el of Array.from(document.querySelectorAll('span, div[dir="auto"]'))) {
-          if (el.children.length) continue;
-          const t = (el.innerText || '').trim();
-          if (t.length > 4 && t.length < 90 && /\\d/.test(t) && dateRe.test(t)) { dateText = t; break; }
-        }
-
-        return { id, title, description, imageUrl, jsonLd, dateText };
-      })()
-    `);
+    const data = await page.evaluate<RawSingleEventItem>(extractSingleEventInBrowser);
 
     if (!data) return null;
     const ld = (data.jsonLd ?? {}) as {
