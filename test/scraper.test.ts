@@ -2,6 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCookies, parseFacebookDate } from '../src/scraper.js';
 
+// 19 Oct 2026, 15:00 Sydney (AEDT, UTC+11), a Monday.
+const now = new Date('2026-10-19T04:00:00Z');
+const sydney = { now, timeZone: 'Australia/Sydney' };
+
 test('parseCookies parses string of cookies into CDP cookie params', () => {
   const raw = 'c_user=1000123456789; xs=2%3Aabc123%3A2%3A12345; datr=abc_def_ghi;';
   const cookies = parseCookies(raw);
@@ -14,18 +18,39 @@ test('parseCookies parses string of cookies into CDP cookie params', () => {
   assert.equal(cookies[2].name, 'datr');
 });
 
-test('parseFacebookDate parses standard natural Facebook date representations', () => {
-  const tomorrow = parseFacebookDate('TOMORROW AT 19:30');
-  assert.ok(tomorrow);
-  assert.match(tomorrow.startTime, /^\d{4}-\d{2}-\d{2}T/);
-  assert.equal(tomorrow.dateOnly, false);
+test('parseFacebookDate interprets wall-clock times in the account time zone, not UTC', () => {
+  // The bug seen in the app: "Sat, 7 Nov at 09:00" was stored as 09:00 UTC (8:00 pm Sydney).
+  const sat = parseFacebookDate('Sat, 7 Nov at 09:00', sydney);
+  assert.equal(sat?.startTime, '2026-11-06T22:00:00.000Z');
+  assert.equal(sat?.dateOnly, false);
 
-  const natural = parseFacebookDate('24 Oct at 10:00 AM');
-  assert.ok(natural);
-  assert.match(natural.startTime, /^\d{4}-10-24T/);
-  assert.equal(natural.dateOnly, false);
+  const tue = parseFacebookDate('Tue, 3 Nov at 12:30', sydney);
+  assert.equal(tue?.startTime, '2026-11-03T01:30:00.000Z');
 
-  const iso = parseFacebookDate('2026-11-15T09:00:00Z');
-  assert.ok(iso);
-  assert.equal(iso.startTime, '2026-11-15T09:00:00.000Z');
+  const pm = parseFacebookDate('24 Oct at 10:00 PM', sydney);
+  assert.equal(pm?.startTime, '2026-10-24T11:00:00.000Z');
+});
+
+test('parseFacebookDate handles today, tomorrow and relative weekdays', () => {
+  assert.equal(parseFacebookDate('TOMORROW AT 19:30', sydney)?.startTime, '2026-10-20T08:30:00.000Z');
+  assert.equal(parseFacebookDate('TODAY AT 18:00', sydney)?.startTime, '2026-10-19T07:00:00.000Z');
+  assert.equal(parseFacebookDate('This Friday at 19:30', sydney)?.startTime, '2026-10-23T08:30:00.000Z');
+  assert.equal(parseFacebookDate('This Sunday at 09:00', sydney)?.startTime, '2026-10-24T22:00:00.000Z');
+  assert.equal(parseFacebookDate('Next Monday at 09:00', sydney)?.startTime, '2026-10-25T22:00:00.000Z');
+});
+
+test('parseFacebookDate reads ranges, explicit offsets, years and rollover', () => {
+  const range = parseFacebookDate('Thu, 5 Nov-7 Nov', sydney);
+  assert.equal(range?.dateOnly, true);
+  assert.equal(range?.startTime, '2026-11-04T13:00:00.000Z');
+  assert.equal(range?.endTime, '2026-11-06T13:00:00.000Z');
+
+  assert.equal(parseFacebookDate('SATURDAY, 24 OCTOBER 2026 AT 10:00 UTC+10', sydney)?.startTime, '2026-10-24T00:00:00.000Z');
+  assert.equal(parseFacebookDate('Jan 5 at 10:00', sydney)?.startTime, '2027-01-04T23:00:00.000Z');
+  assert.equal(parseFacebookDate('2026-11-15T09:00:00Z')?.startTime, '2026-11-15T09:00:00.000Z');
+});
+
+test('parseFacebookDate returns null instead of inventing a date', () => {
+  assert.equal(parseFacebookDate('', sydney), null);
+  assert.equal(parseFacebookDate('Creedence Clearwater Experience', sydney), null);
 });
