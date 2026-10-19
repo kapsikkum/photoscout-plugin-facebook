@@ -110,6 +110,7 @@ export function parseFacebookDate(text?: string, options: ParseDateOptions = {})
   const make = (y: number, mo: number, d: number) => wallClockToUtc(y, mo, d, hours, minutes, timeZone, fixedOffsetMin);
   const done = (start: Date, end?: Date) => ({ startTime: start.toISOString(), endTime: end?.toISOString(), dateOnly: !timeMatch });
 
+  if (/\bhappening now\b/i.test(raw)) return { startTime: now.toISOString(), dateOnly: false };
   if (/\btoday\b/i.test(raw)) return done(make(today.y, today.m, today.d));
   if (/\btomorrow\b/i.test(raw)) return done(make(today.y, today.m, today.d + 1));
 
@@ -230,8 +231,8 @@ export async function scrapeFacebookEvents(opts: ScrapeOptions): Promise<PluginR
           // title, so classify every piece of text rather than trusting the first one.
           const dayWord = '(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*';
           const monthWord = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
-          const dateLike = new RegExp('^(?:(?:this|next)\\s+)?(?:' + dayWord + '|today|tomorrow)\\b.*(?:\\d|' + monthWord + ')|^\\d{1,2}\\s+' + monthWord + '\\b|^' + monthWord + '\\s+\\d{1,2}\\b|^(?:today|tomorrow)\\b', 'i');
-          const noise = /^(?:going|interested|share|invite|maybe|event|events|see more|more|·|\\d+ (?:going|interested)|starts in .*|.* (?:going|interested))$/i;
+          const dateLike = new RegExp('^(?:(?:this|next)\\s+)?(?:' + dayWord + '|today|tomorrow)\\b.*(?:\\d|' + monthWord + ')|^\\d{1,2}\\s+' + monthWord + '\\b|^' + monthWord + '\\s+\\d{1,2}\\b|^(?:today|tomorrow)\\b|^happening now', 'i');
+          const noise = /^(?:happening now|going|interested|share|invite|maybe|event|events|see more|more|·|\\d+ (?:going|interested)|starts in .*|.* (?:going|interested))$/i;
           const texts = [];
           const push = (t) => { t = (t || '').replace(/\\s+/g, ' ').trim(); if (t && !texts.includes(t)) texts.push(t); };
           for (const line of (a.innerText || '').split('\\n')) push(line);

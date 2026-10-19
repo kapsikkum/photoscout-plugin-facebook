@@ -50,6 +50,10 @@ test('parseFacebookDate reads ranges, explicit offsets, years and rollover', () 
   assert.equal(parseFacebookDate('2026-11-15T09:00:00Z')?.startTime, '2026-11-15T09:00:00.000Z');
 });
 
+test('parseFacebookDate treats Happening now as the current moment', () => {
+  assert.equal(parseFacebookDate('Happening now', sydney)?.startTime, now.toISOString());
+});
+
 test('parseFacebookDate returns null instead of inventing a date', () => {
   assert.equal(parseFacebookDate('', sydney), null);
   assert.equal(parseFacebookDate('Creedence Clearwater Experience', sydney), null);
