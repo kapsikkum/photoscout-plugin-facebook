@@ -78,6 +78,22 @@ export interface ParseDateOptions { now?: Date; timeZone?: string }
  * Handled: "SAT, 24 OCT AT 10:00", "Tue, 3 Nov at 12:30", "TODAY/TOMORROW AT 19:30",
  * "This Friday at 19:30", "Next Sunday", ranges like "Thu, 5 Nov-7 Nov", ISO strings.
  */
+/**
+ * Strips client thumbnail downscaling hints (e.g. ctp=s168x128 or ctp=s320x320)
+ * from Facebook CDN URLs. Facebook's CDN serves the un-downscaled image (at up to 2048px)
+ * without invalidating the HMAC token (`oh=...`).
+ */
+export function cleanFacebookImageUrl(url?: string): string {
+  if (!url || typeof url !== 'string') return '';
+  try {
+    const u = new URL(url);
+    u.searchParams.delete('ctp');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function parseFacebookDate(text?: string, options: ParseDateOptions = {}): { startTime: string; endTime?: string; dateOnly?: boolean } | null {
   if (!text || typeof text !== 'string') return null;
   const raw = text.trim();
@@ -124,12 +140,29 @@ export function parseFacebookDate(text?: string, options: ParseDateOptions = {})
     const explicitYear = match[3] ? parseInt(match[3], 10) : undefined;
     if (monthIndex !== undefined && day >= 1 && day <= 31) {
       let year = explicitYear ?? today.y;
-      let start = make(year, monthIndex, day);
-      // No year given and the date is well in the past: it means next year.
-      if (explicitYear === undefined && start.getTime() < now.getTime() - 7 * 86400000) {
-        year += 1;
-        start = make(year, monthIndex, day);
+      if (explicitYear === undefined) {
+        // If a weekday was in the string (e.g. "Sat, 12 Sep"), check which candidate year matches that weekday.
+        const weekdayMatch = /\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/i.exec(raw);
+        const expectedWeekday = weekdayMatch ? WEEKDAYS.indexOf(weekdayMatch[1].toLowerCase().slice(0, 3)) : -1;
+        if (expectedWeekday !== -1) {
+          const matchThisYear = new Date(Date.UTC(today.y, monthIndex, day, 12, 0, 0)).getUTCDay() === expectedWeekday;
+          const matchNextYear = new Date(Date.UTC(today.y + 1, monthIndex, day, 12, 0, 0)).getUTCDay() === expectedWeekday;
+          if (matchThisYear && !matchNextYear) {
+            year = today.y;
+          } else if (matchNextYear && !matchThisYear) {
+            year = today.y + 1;
+          }
+        } else if (monthIndex < today.m) {
+          // If no weekday is present, only roll over across the new year boundary
+          // when today is late in the year (Oct/Nov/Dec) and the event is in early next year (Jan/Feb/Mar, <= 3 months ahead).
+          // An event from last month or earlier this year is in the current calendar year.
+          const monthsAhead = monthIndex + 12 - today.m;
+          if (monthsAhead <= 3 && today.m >= 9) {
+            year = today.y + 1;
+          }
+        }
       }
+      let start = make(year, monthIndex, day);
       // A range such as "Thu, 5 Nov-7 Nov" ends on its second date.
       let end: Date | undefined;
       const afterStart = raw.slice(match.index + match[0].length).replace(/^\s+at\s+\d{1,2}:\d{2}(?:\s*[ap]m)?/i, '');
@@ -176,7 +209,7 @@ export function extractCardsInBrowser(): RawCardItem[] {
     '^(?:(?:this|next)\\s+)?(?:' + dayWord + '|today|tomorrow)\\b.*(?:\\d|' + monthWord + ')|^\\d{1,2}\\s+' + monthWord + '\\b|^' + monthWord + '\\s+\\d{1,2}\\b|^(?:today|tomorrow)\\b|^happening now',
     'i'
   );
-  const noise = /^(?:happening now|going|interested|share|invite|maybe|event|events|see more|more|\u00b7|\d+ (?:going|interested)|starts in .*|.* (?:going|interested))$/i;
+  const noise = /^(?:happening now|going|went|interested|share|invite|maybe|event|events|see more|more|\u00b7|\d+ (?:going|went|interested)|starts in .*|.* (?:going|went|interested))$/i;
 
   const anchors = Array.from(document.querySelectorAll('a[href*="/events/"]'));
   for (const a of anchors) {
@@ -217,7 +250,16 @@ export function extractCardsInBrowser(): RawCardItem[] {
     locationText = rest.find((t) => t !== title && t.length < 80) || '';
     if (card) {
       const img = card.querySelector('img[src*="fbcdn"]');
-      if (img) imageUrl = img.getAttribute('src') || '';
+      if (img) {
+        const src = img.getAttribute('src') || '';
+        try {
+          const u = new URL(src);
+          u.searchParams.delete('ctp');
+          imageUrl = u.toString();
+        } catch {
+          imageUrl = src;
+        }
+      }
     }
 
     if (title && id) {
@@ -287,7 +329,7 @@ export async function scrapeFacebookEvents(opts: ScrapeOptions): Promise<PluginR
         venueName: item.locationText || undefined,
         address: item.locationText || undefined,
         url: item.url,
-        imageUrl: item.imageUrl || undefined,
+        imageUrl: cleanFacebookImageUrl(item.imageUrl) || undefined,
         category: 'Community',
       });
     }
@@ -333,8 +375,21 @@ export function extractSingleEventInBrowser(): RawSingleEventItem {
     } catch {}
   }
 
-  const img = document.querySelector('img[src*="fbcdn"]');
-  const imageUrl = img ? img.getAttribute('src') || '' : '';
+  // Pick the largest fbcdn image on the page (the cover photo), avoiding avatars and icons
+  const fbcdnImgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]')) as HTMLImageElement[];
+  fbcdnImgs.sort((a, b) => {
+    const areaA = (a.naturalWidth || a.width || 0) * (a.naturalHeight || a.height || 0);
+    const areaB = (b.naturalWidth || b.width || 0) * (b.naturalHeight || b.height || 0);
+    return areaB - areaA;
+  });
+  let imageUrl = fbcdnImgs[0]?.getAttribute('src') || '';
+  if (imageUrl) {
+    try {
+      const u = new URL(imageUrl);
+      u.searchParams.delete('ctp');
+      imageUrl = u.toString();
+    } catch {}
+  }
 
   // The visible date line ("Saturday, 24 October 2026 at 10:00 UTC+11") when JSON-LD is absent.
   let dateText = '';
@@ -390,7 +445,7 @@ export async function scrapeSingleEvent(browserUrl: string, eventUrl: string, co
       venueName: data.venueName ?? ld.location?.name,
       address: data.address ?? (ldAddress || undefined),
       url: eventUrl,
-      imageUrl: data.imageUrl,
+      imageUrl: cleanFacebookImageUrl(data.imageUrl) || undefined,
       category: 'Community',
     };
   } finally {

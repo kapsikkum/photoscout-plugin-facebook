@@ -54,6 +54,26 @@ test('parseFacebookDate treats Happening now as the current moment', () => {
   assert.equal(parseFacebookDate('Happening now', sydney)?.startTime, now.toISOString());
 });
 
+test('parseFacebookDate does not push past dates from earlier this year into next year', () => {
+  // "Sat, 12 Sep" parsed in Oct 2026: 12 Sep 2026 is Saturday, 12 Sep 2027 is Sunday
+  const sep = parseFacebookDate('Sat, 12 Sep', sydney);
+  assert.equal(sep?.startTime, '2026-09-11T14:00:00.000Z');
+  assert.notEqual(sep?.startTime.slice(0, 4), '2027');
+
+  // "12 Sep 2026" with explicit time
+  const time = parseFacebookDate('Saturday 12 September 2026 from 17:00-19:00', sydney);
+  assert.equal(time?.startTime, '2026-09-12T07:00:00.000Z');
+});
+
+test('cleanFacebookImageUrl strips ctp downscaling hints', async () => {
+  const { cleanFacebookImageUrl } = await import('../src/scraper.js');
+  const urlWithCtp = 'https://scontent.fsyd12-1.fna.fbcdn.net/v/t39.30808-6/780180278_1101074766047013_7128266683094206275_n.jpg?stp=c104.0.753.502a_dst-jpg_tt6&cstp=mx753x502&ctp=s168x128&_nc_cat=109&oh=abc&oe=123';
+  const cleaned = cleanFacebookImageUrl(urlWithCtp);
+  assert.equal(cleaned.includes('ctp='), false);
+  assert.equal(cleaned.includes('cstp=mx753x502'), true);
+  assert.equal(cleaned.includes('oh=abc'), true);
+});
+
 test('parseFacebookDate returns null instead of inventing a date', () => {
   assert.equal(parseFacebookDate('', sydney), null);
   assert.equal(parseFacebookDate('Creedence Clearwater Experience', sydney), null);

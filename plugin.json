@@ -2,7 +2,7 @@
   "$schema": "../../docs/plugins/plugin.schema.json",
   "id": "media.24thframe.facebook-events",
   "name": "Facebook Events (Stealth Browser)",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Scrapes Facebook /events using a stealth automated browser and session cookies.",
   "author": "24th Frame",
   "category": "events",
