@@ -1,0 +1,19 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    uses: kapsikkum/photoscout-plugins/.github/workflows/publish-plugin.yml@main
+    with:
+      plugin-dir: .
+      photoscout-ref: master
+      release-tag: ${{ github.event.release.tag_name }}
+      min-core: "^1.3"
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
